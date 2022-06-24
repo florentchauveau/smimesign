@@ -8,6 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	_ "crypto/sha1" // for crypto.SHA1
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -416,6 +417,55 @@ type SignerInfo struct {
 	UnsignedAttrs      Attributes `asn1:"set,optional,tag:1"`
 }
 
+// SigningCertificateV2 ::=  SEQUENCE {
+// 	certs        SEQUENCE OF ESSCertIDv2,
+// 	policies     SEQUENCE OF PolicyInformation OPTIONAL
+// }
+type SigningCertificateV2 struct {
+	Certs []ESSCertIDv2
+}
+
+// ESSCertIDv2 ::=  SEQUENCE {
+// 	hashAlgorithm           AlgorithmIdentifier
+// 		   DEFAULT {algorithm id-sha256},
+// 	certHash                 Hash,
+// 	issuerSerial             IssuerSerial OPTIONAL
+// }
+// Hash ::= OCTET STRING
+type ESSCertIDv2 struct {
+	HashAlgorithm pkix.AlgorithmIdentifier `asn1:"optional"`
+	CertHash      []byte
+	IssuerSerial  IssuerSerial `asn1:"optional"`
+}
+
+// IssuerSerial ::= SEQUENCE {
+// 	issuer                   GeneralNames,
+// 	serialNumber             CertificateSerialNumber
+// }
+type IssuerSerial struct {
+	IssuerName   GeneralNames
+	SerialNumber *big.Int
+}
+
+// GeneralName ::= CHOICE {
+// 	otherName                       [0]     OtherName,
+// 	rfc822Name                      [1]     IA5String,
+// 	dNSName                         [2]     IA5String,
+// 	x400Address                     [3]     ORAddress,
+// 	directoryName                   [4]     Name,
+// 	ediPartyName                    [5]     EDIPartyName,
+// 	uniformResourceIdentifier       [6]     IA5String,
+// 	iPAddress                       [7]     OCTET STRING,
+// 	registeredID                    [8]     OBJECT IDENTIFIER }
+
+// OtherName ::= SEQUENCE {
+// 	type-id    OBJECT IDENTIFIER,
+// 	value      [0] EXPLICIT ANY DEFINED BY type-id }
+
+type GeneralNames struct {
+	Name asn1.RawValue `asn1:"optional,tag:4"`
+}
+
 // FindCertificate finds this SignerInfo's certificate in a slice of
 // certificates.
 func (si SignerInfo) FindCertificate(certs []*x509.Certificate) (*x509.Certificate, error) {
@@ -711,8 +761,34 @@ func (sd *SignedData) AddSignerInfo(chain []*x509.Certificate, signer crypto.Sig
 		return err
 	}
 
+	certHash := sha256.Sum256(cert.Raw)
+	signingCertificate := SigningCertificateV2{
+		Certs: []ESSCertIDv2{
+			{
+				// defaults to SHA256, no needed
+				// HashAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oid.DigestAlgorithmSHA256},
+				CertHash: certHash[:],
+				IssuerSerial: IssuerSerial{
+					IssuerName: GeneralNames{
+						Name: asn1.RawValue{
+							Tag:        4,
+							Class:      2,
+							IsCompound: true,
+							Bytes:      cert.RawIssuer,
+						},
+					},
+					SerialNumber: cert.SerialNumber,
+				},
+			},
+		},
+	}
+	scAttr, err := NewAttribute(oid.AttributeSigningCertificateV2, signingCertificate)
+	if err != nil {
+		return err
+	}
+
 	// sort attributes to match required order in marshaled form
-	si.SignedAttrs, err = sortAttributes(stAttr, mdAttr, ctAttr)
+	si.SignedAttrs, err = sortAttributes(stAttr, mdAttr, ctAttr, scAttr)
 	if err != nil {
 		return err
 	}
