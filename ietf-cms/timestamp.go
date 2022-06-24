@@ -35,6 +35,30 @@ func (sd *SignedData) AddTimestamps(url string) error {
 	return nil
 }
 
+// GetTimestamp returns the RFC3161 timestamp.Info from the SignerInfo.
+func GetTimestamp(si protocol.SignerInfo) (timestamp.Info, error) {
+	rawValue, err := si.UnsignedAttrs.GetOnlyAttributeValueBytes(oid.AttributeTimeStampToken)
+	if err != nil {
+		return timestamp.Info{}, err
+	}
+
+	tst, err := ParseSignedData(rawValue.FullBytes)
+	if err != nil {
+		return timestamp.Info{}, err
+	}
+
+	tsti, err := timestamp.ParseInfo(tst.EncapContentInfo)
+	if err != nil {
+		return timestamp.Info{}, err
+	}
+
+	if tsti.Version != 1 {
+		return timestamp.Info{}, protocol.ErrUnsupported
+	}
+
+	return tsti, nil
+}
+
 func fetchTS(url string, si protocol.SignerInfo) (protocol.Attribute, error) {
 	nilAttr := protocol.Attribute{}
 
